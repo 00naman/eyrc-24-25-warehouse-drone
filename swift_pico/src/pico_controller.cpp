@@ -93,7 +93,6 @@ class Swift_Pico : public rclcpp::Node
             Kd[1] = 0;
             Kd[2] = 0;
             /*-----------------------Add other required variables for pid here ----------------------------------------------*/
-
             memset(positional_error, 0, sizeof(positional_error));
             memset(drone_orientation, 0, sizeof(drone_orientation));
 
@@ -125,16 +124,16 @@ class Swift_Pico : public rclcpp::Node
 
             //Subscribing to /whycon/poses, /throttle_pid, /pitch_pid, roll_pid
             whycon_sub = this->create_subscription<geometry_msgs::msg::PoseArray>("/whycon/poses", 1, std::bind(&Swift_Pico::whycon_callback, this, _1));
-            // throttle_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/throttle_pid", 1, std::bind(&Swift_Pico::altitude_set_pid, this, _1));
+            roll_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/roll_pid", 1, std::bind(&Swift_Pico::roll_set_pid, this, _1));
+            pitch_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/pitch_pid", 1, std::bind(&Swift_Pico::pitch_set_pid, this, _1));
+            throttle_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/throttle_pid", 1, std::bind(&Swift_Pico::throttle_set_pid, this, _1));
 
             //------------------------Add other ROS 2 Subscribers here-----------------------------------------------------
-
-
             //Arming the drone
             arm();
 
             //Creating a timer to run the pid function periodically, refer ROS 2 tutorials on how to create a publisher subscriber(C++)
-            run_pid = this->create_wall_timer(sample_time, std::bind(&Swift_Pico::pid, this));
+            // run_pid = this->create_wall_timer(sample_time, std::bind(&Swift_Pico::pid, this));
 
         }
 
@@ -151,14 +150,16 @@ class Swift_Pico : public rclcpp::Node
         float Kd[3];
         float positional_error[3];
 
-        // error buffers
+        //error buffers
         ErrorBuffer buffer;
 
         //declare the publishers and subscribers here
         rclcpp::Publisher<swift_msgs::msg::SwiftMsgs>::SharedPtr command_pub;
-        rclcpp::Publisher<pid_msg::msg::PIDError>::SharedPtr pid_error_pub;
+        rclcpp::Publisher<pid_msg::msg::PIDError>::SharedPtr pid_error_pub; 
 
         rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr whycon_sub;
+        rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr roll_pid_sub;
+        rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr pitch_pid_sub;
         rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr throttle_pid_sub;
 
         //timers
@@ -211,17 +212,33 @@ class Swift_Pico : public rclcpp::Node
             drone_orientation[2] = 2.0 * (x * z - w * y);
             
             // for (int t = 0; t < 3; ++t) {
-            //     std::cout << drone_position[t] << ' ';
+            //     std::cout << drone_orientation[t] << ' ';
             // }std::cout << std::endl;
         }
 
         //Callback function for /throttle_pid
 	    //This function gets executed each time when /drone_pid_tuner publishes /throttle_pid
 	
-        void altitude_set_pid(const pid_msg::msg::PIDTune & alt)
+        void roll_set_pid(const pid_msg::msg::PIDTune & alt)
         {
             // std::cout << "this is running..." << std::endl;
-            Kp[2] = alt.kp * 0.03;  // This is just for an example. You can change the ratio/fraction value accordingly
+            Kp[0] = alt.kp;  // This is just for an example. You can change the ratio/fraction value accordingly
+		    Ki[0] = alt.ki * 0.008;
+		    Kd[0] = alt.kd * 0.6;
+        }
+
+        void pitch_set_pid(const pid_msg::msg::PIDTune & alt)
+        {
+            // std::cout << "this is running..." << std::endl;
+            Kp[1] = alt.kp;  // This is just for an example. You can change the ratio/fraction value accordingly
+		    Ki[1] = alt.ki * 0.008;
+		    Kd[1] = alt.kd * 0.6;
+        }
+
+        void throttle_set_pid(const pid_msg::msg::PIDTune & alt)
+        {
+            // std::cout << "this is running..." << std::endl;
+            Kp[2] = alt.kp;  // This is just for an example. You can change the ratio/fraction value accordingly
 		    Ki[2] = alt.ki * 0.008;
 		    Kd[2] = alt.kd * 0.6;
         }
@@ -252,12 +269,12 @@ class Swift_Pico : public rclcpp::Node
             #------------------------------------------------------------------------------------------------------------------------*/
 
             //computing the error
-            positional_error[0] = setpoint[0] - drone_position[0]; // dx
-            positional_error[1] = setpoint[1] - drone_position[1]; // dy
-            positional_error[2] = setpoint[2] - drone_position[2]; // dz
+            positional_error[0] = -(setpoint[0] - drone_position[0]); // dx
+            positional_error[1] = -(setpoint[1] - drone_position[1]); // dy
+            positional_error[2] = -(setpoint[2] - drone_position[2]); // dz
 
             // roll = pid(|cross(positional_error, normalised_drone_orientation)|)
-            buffer.cumulative.roll_error -= buffer.error[buffer.ptr].roll_error;
+            // buffer.cumulative.roll_error -= buffer.error[buffer.ptr].roll_error;
             buffer.error[buffer.ptr].roll_error = drone_orientation[0] * (positional_error[2] - positional_error[1])
                                                 - drone_orientation[1] * (positional_error[2] - positional_error[0])
                                                 + drone_orientation[2] * (positional_error[1] - positional_error[0]); // cross product
@@ -272,7 +289,7 @@ class Swift_Pico : public rclcpp::Node
             error_pub.roll_error = roll_error;
 
             // pitch = pid(|dot(positional_error, normalised_drone_orientation)|)
-            buffer.cumulative.pitch_error -= buffer.error[buffer.ptr].pitch_error;
+            // buffer.cumulative.pitch_error -= buffer.error[buffer.ptr].pitch_error;
             buffer.error[buffer.ptr].pitch_error = (drone_orientation[0] * positional_error[0]) + 
                                                    (drone_orientation[1] * positional_error[1]) +
                                                    (drone_orientation[2] * positional_error[2]); // dot product
@@ -287,7 +304,7 @@ class Swift_Pico : public rclcpp::Node
             error_pub.pitch_error = pitch_error;
 
             // throttle = pid(positional_error[2]);
-            buffer.cumulative.throttle_error -= buffer.error[buffer.ptr].throttle_error;
+            // buffer.cumulative.throttle_error -= buffer.error[buffer.ptr].throttle_error;
             buffer.error[buffer.ptr].throttle_error = positional_error[2]; // dz
             buffer.cumulative.throttle_error += buffer.error[buffer.ptr].throttle_error;
 
@@ -295,7 +312,7 @@ class Swift_Pico : public rclcpp::Node
             float integral_throttle_error = buffer.cumulative.throttle_error;
             float derivative_throttle_error = buffer.error[buffer.ptr].throttle_error - buffer.error[(buffer.ptr - 1) % WINDOW_SIZE].throttle_error;
 
-            cmd.rc_throttle = Kp[1] * throttle_error + Ki[1] * integral_throttle_error + Kd[1] * derivative_throttle_error;
+            cmd.rc_throttle = Kp[2] * throttle_error + Ki[2] * integral_throttle_error + Kd[2] * derivative_throttle_error;
             error_pub.throttle_error = throttle_error;
 
             buffer.ptr = (buffer.ptr + 1) % WINDOW_SIZE;
