@@ -34,6 +34,7 @@ install(TARGETS
 #Install scripts
 install(PROGRAMS
   src/pico_controller.py
+  src/teleop_drone.py
   scripts/map.py
   DESTINATION lib/${PROJECT_NAME}
 )
