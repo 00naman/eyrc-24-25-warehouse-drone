@@ -51,6 +51,8 @@ def generate_launch_description():
         output='screen'
     )
 
+
+    # localisation
     whycon = Node(
             package='whycon',
             name='whycon',
@@ -98,7 +100,7 @@ def generate_launch_description():
         roll_pitch_yawrate_thrust_controller,
         swift_interface,
         whycon,
-        image_view,
-        pico_controller, 
-        rosbag
+        # image_view,
+        # pico_controller, 
+        # rosbag
     ])

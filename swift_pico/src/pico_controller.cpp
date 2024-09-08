@@ -11,15 +11,19 @@ Rather than using different variables, use list. eg : self.setpoint = [1,2,3], w
 CODE MODULARITY AND TECHNIQUES MENTIONED LIKE THIS WILL HELP YOU GAINING MORE MARKS WHILE CODE EVALUATION.*/
 
 // importing the required libraries
+#include <iostream>
 #include <chrono>
 #include <functional>
 #include <memory>
 
 #include "geometry_msgs/msg/pose_array.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "swift_msgs/msg/swift_msgs.hpp"
 #include "pid_msg/msg/pid_tune.hpp"
 #include "pid_msg/msg/pid_error.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+#define WINDOW_SIZE 128
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
@@ -39,9 +43,14 @@ struct ERROR
     float pitch_error;
     float throttle_error;
     float yaw_error;
-
 };
 
+struct ErrorBuffer {
+    ERROR error[WINDOW_SIZE];
+    ERROR cumulative;
+    int length;
+    int ptr;
+};
 
 class Swift_Pico : public rclcpp::Node
 {
@@ -61,10 +70,10 @@ class Swift_Pico : public rclcpp::Node
             setpoint[2] = 20;
 
             //Declaring a cmd of message type swift_msgs and initializing values
-            cmd.rc_roll = 1500;
-            cmd.rc_pitch = 1500;
-            cmd.rc_yaw = 1500;
-            cmd.rc_throttle = 1500;
+            shared_cmd.rc_roll = 1500;
+            shared_cmd.rc_pitch = 1500;
+            shared_cmd.rc_yaw = 1500;
+            shared_cmd.rc_throttle = 1500;
 
             /*initial setting of Kp, Kd and ki for [roll, pitch, throttle]. eg: self.Kp[2] corresponds to Kp value in throttle axis
 		    after tuning and computing corresponding PID parameters, change the parameters*/
@@ -85,13 +94,16 @@ class Swift_Pico : public rclcpp::Node
             Kd[2] = 0;
             /*-----------------------Add other required variables for pid here ----------------------------------------------*/
 
+            memset(positional_error, 0, sizeof(positional_error));
+            memset(drone_orientation, 0, sizeof(drone_orientation));
 
+            buffer.cumulative.roll_error = 0;
+            buffer.cumulative.pitch_error = 0;
+            buffer.cumulative.throttle_error = 0;
+            buffer.length = 0;
+            buffer.ptr = 0;
 
-
-
-
-
-
+            memset(buffer.error, 0, WINDOW_SIZE * sizeof(ERROR));
 
             /* Hint : Add variables for storing previous errors in each axis, like prev_error = [0,0,0] where corresponds to [pitch, roll, throttle]. 
             Add variables for limiting the values like max_values = [2000,2000,2000] corresponding to [roll, pitch, throttle]
@@ -113,7 +125,7 @@ class Swift_Pico : public rclcpp::Node
 
             //Subscribing to /whycon/poses, /throttle_pid, /pitch_pid, roll_pid
             whycon_sub = this->create_subscription<geometry_msgs::msg::PoseArray>("/whycon/poses", 1, std::bind(&Swift_Pico::whycon_callback, this, _1));
-            throttle_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/throttle_pid", 1, std::bind(&Swift_Pico::altitude_set_pid, this, _1));
+            // throttle_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/throttle_pid", 1, std::bind(&Swift_Pico::altitude_set_pid, this, _1));
 
             //------------------------Add other ROS 2 Subscribers here-----------------------------------------------------
 
@@ -122,9 +134,7 @@ class Swift_Pico : public rclcpp::Node
             arm();
 
             //Creating a timer to run the pid function periodically, refer ROS 2 tutorials on how to create a publisher subscriber(C++)
-
-
-
+            run_pid = this->create_wall_timer(sample_time, std::bind(&Swift_Pico::pid, this));
 
         }
 
@@ -132,12 +142,17 @@ class Swift_Pico : public rclcpp::Node
 
         //declare all the variables, arrays, strcuts etc. here
         float drone_position[3];
+        float drone_orientation[3]; // vector the drone points towards at all times
         int setpoint[3];
-        CMD cmd;
+        CMD shared_cmd;
         std::chrono::milliseconds sample_time;
         float Kp[3];
         float Ki[3];
         float Kd[3];
+        float positional_error[3];
+
+        // error buffers
+        ErrorBuffer buffer;
 
         //declare the publishers and subscribers here
         rclcpp::Publisher<swift_msgs::msg::SwiftMsgs>::SharedPtr command_pub;
@@ -145,6 +160,9 @@ class Swift_Pico : public rclcpp::Node
 
         rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr whycon_sub;
         rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr throttle_pid_sub;
+
+        //timers
+        rclcpp::TimerBase::SharedPtr run_pid;
 
         //define functions and callbacks here
 
@@ -175,13 +193,26 @@ class Swift_Pico : public rclcpp::Node
         void whycon_callback(const geometry_msgs::msg::PoseArray & msg)
         {
             drone_position[0] = msg.poses[0].position.x;
-            /*--------------------Set the remaining co-ordinates of the drone from msg----------------------------------------------
+            drone_position[1] = msg.poses[0].position.y;
+            drone_position[2] = msg.poses[0].position.z;
 
+            // std::cout << msg.poses[0].orientation.x << ' ';
+            // std::cout << msg.poses[0].orientation.y << ' ';
+            // std::cout << msg.poses[0].orientation.z << ' ';
+            // std::cout << msg.poses[0].orientation.w << std::endl;
 
+            float x = msg.poses[0].orientation.x;
+            float y = msg.poses[0].orientation.y;
+            float z = msg.poses[0].orientation.z;
+            float w = msg.poses[0].orientation.w;
 
-	
-		    ------------------------------------------------------------------------------------------------------------------------*/
-
+            drone_orientation[0] = (w * w + x * x - y * y - z * z);
+            drone_orientation[1] = 2.0 * (w * z + x * y);
+            drone_orientation[2] = 2.0 * (x * z - w * y);
+            
+            // for (int t = 0; t < 3; ++t) {
+            //     std::cout << drone_position[t] << ' ';
+            // }std::cout << std::endl;
         }
 
         //Callback function for /throttle_pid
@@ -189,6 +220,7 @@ class Swift_Pico : public rclcpp::Node
 	
         void altitude_set_pid(const pid_msg::msg::PIDTune & alt)
         {
+            // std::cout << "this is running..." << std::endl;
             Kp[2] = alt.kp * 0.03;  // This is just for an example. You can change the ratio/fraction value accordingly
 		    Ki[2] = alt.ki * 0.008;
 		    Kd[2] = alt.kd * 0.6;
@@ -217,27 +249,44 @@ class Swift_Pico : public rclcpp::Node
             #	7. Update previous errors.eg: self.prev_error[1] = error[1] where index 1 corresponds to that of pitch (eg)
             #	8. Add error_sum
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             #------------------------------------------------------------------------------------------------------------------------*/
-            command_pub->publish(cmd);
+
+            //computing the error
+            positional_error[0] = setpoint[0] - drone_position[0]; // dx
+            positional_error[1] = setpoint[1] - drone_position[1]; // dy
+            positional_error[2] = setpoint[2] - drone_position[2]; // dz
+
+            // pitch = pid(|dot(positional_error, normalised_drone_orientation)|)
+            buffer.cumulative.pitch_error -= buffer.error[buffer.ptr].pitch_error;
+            buffer.error[buffer.ptr].pitch_error = (drone_orientation[0] * positional_error[0]) + 
+                                                   (drone_orientation[1] * positional_error[1]) +
+                                                   (drone_orientation[2] * positional_error[2]); // dot product
+
+            buffer.cumulative.pitch_error += buffer.error[buffer.ptr].pitch_error;
+
+            // roll = pid(|cross(positional_error, normalised_drone_orientation)|)
+            buffer.cumulative.roll_error -= buffer.error[buffer.ptr].roll_error;
+            buffer.error[buffer.ptr].roll_error = drone_orientation[0] * (positional_error[2] - positional_error[1])
+                                                - drone_orientation[1] * (positional_error[2] - positional_error[0])
+                                                + drone_orientation[2] * (positional_error[1] - positional_error[0]); // cross product
+            
+            buffer.cumulative.roll_error += buffer.error[buffer.ptr].roll_error;
+
+            // throttle = pid(positional_error[2]);
+            buffer.cumulative.throttle_error -= buffer.error[buffer.ptr].throttle_error;
+            buffer.error[buffer.ptr].throttle_error = positional_error[2]; // dz
+            buffer.cumulative.throttle_error += buffer.error[buffer.ptr].throttle_error;
+
+            buffer.ptr = (buffer.ptr + 1) % WINDOW_SIZE;
+            buffer.length = std::min(buffer.length + 1, WINDOW_SIZE);
+
+            // for (int t = 0; t < 3; ++t) {
+            //     std::cout << positional_error[t] << ' ';
+            // }std::cout << std::endl;
+
+            // command_pub->publish(cmd);
             //calculate throttle error, pitch error and roll error, then publish it accordingly
-            pid_error_pub->publish(error_pub);
+            // pid_error_pub->publish(error_pub);
 
         }
 };
