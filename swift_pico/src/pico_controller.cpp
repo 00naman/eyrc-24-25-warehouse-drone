@@ -256,14 +256,6 @@ class Swift_Pico : public rclcpp::Node
             positional_error[1] = setpoint[1] - drone_position[1]; // dy
             positional_error[2] = setpoint[2] - drone_position[2]; // dz
 
-            // pitch = pid(|dot(positional_error, normalised_drone_orientation)|)
-            buffer.cumulative.pitch_error -= buffer.error[buffer.ptr].pitch_error;
-            buffer.error[buffer.ptr].pitch_error = (drone_orientation[0] * positional_error[0]) + 
-                                                   (drone_orientation[1] * positional_error[1]) +
-                                                   (drone_orientation[2] * positional_error[2]); // dot product
-
-            buffer.cumulative.pitch_error += buffer.error[buffer.ptr].pitch_error;
-
             // roll = pid(|cross(positional_error, normalised_drone_orientation)|)
             buffer.cumulative.roll_error -= buffer.error[buffer.ptr].roll_error;
             buffer.error[buffer.ptr].roll_error = drone_orientation[0] * (positional_error[2] - positional_error[1])
@@ -272,10 +264,39 @@ class Swift_Pico : public rclcpp::Node
             
             buffer.cumulative.roll_error += buffer.error[buffer.ptr].roll_error;
 
+            float roll_error = buffer.error[buffer.ptr].roll_error;
+            float integral_roll_error = buffer.cumulative.roll_error;
+            float derivative_roll_error = buffer.error[buffer.ptr].roll_error - buffer.error[(buffer.ptr - 1) % WINDOW_SIZE].roll_error;
+
+            cmd.rc_roll = Kp[0] * roll_error + Ki[0] * integral_roll_error + Kd[0] * derivative_roll_error;
+            error_pub.roll_error = roll_error;
+
+            // pitch = pid(|dot(positional_error, normalised_drone_orientation)|)
+            buffer.cumulative.pitch_error -= buffer.error[buffer.ptr].pitch_error;
+            buffer.error[buffer.ptr].pitch_error = (drone_orientation[0] * positional_error[0]) + 
+                                                   (drone_orientation[1] * positional_error[1]) +
+                                                   (drone_orientation[2] * positional_error[2]); // dot product
+
+            buffer.cumulative.pitch_error += buffer.error[buffer.ptr].pitch_error;
+
+            float pitch_error = buffer.error[buffer.ptr].pitch_error;
+            float integral_pitch_error = buffer.cumulative.pitch_error;
+            float derivative_pitch_error = buffer.error[buffer.ptr].pitch_error - buffer.error[(buffer.ptr - 1) % WINDOW_SIZE].pitch_error;
+
+            cmd.rc_pitch = Kp[1] * pitch_error + Ki[1] * integral_pitch_error + Kd[1] * derivative_pitch_error;
+            error_pub.pitch_error = pitch_error;
+
             // throttle = pid(positional_error[2]);
             buffer.cumulative.throttle_error -= buffer.error[buffer.ptr].throttle_error;
             buffer.error[buffer.ptr].throttle_error = positional_error[2]; // dz
             buffer.cumulative.throttle_error += buffer.error[buffer.ptr].throttle_error;
+
+            float throttle_error = buffer.error[buffer.ptr].throttle_error;
+            float integral_throttle_error = buffer.cumulative.throttle_error;
+            float derivative_throttle_error = buffer.error[buffer.ptr].throttle_error - buffer.error[(buffer.ptr - 1) % WINDOW_SIZE].throttle_error;
+
+            cmd.rc_throttle = Kp[1] * throttle_error + Ki[1] * integral_throttle_error + Kd[1] * derivative_throttle_error;
+            error_pub.throttle_error = throttle_error;
 
             buffer.ptr = (buffer.ptr + 1) % WINDOW_SIZE;
             buffer.length = std::min(buffer.length + 1, WINDOW_SIZE);
@@ -284,9 +305,9 @@ class Swift_Pico : public rclcpp::Node
             //     std::cout << positional_error[t] << ' ';
             // }std::cout << std::endl;
 
-            // command_pub->publish(cmd);
+            command_pub->publish(cmd);
             //calculate throttle error, pitch error and roll error, then publish it accordingly
-            // pid_error_pub->publish(error_pub);
+            pid_error_pub->publish(error_pub);
 
         }
 };
