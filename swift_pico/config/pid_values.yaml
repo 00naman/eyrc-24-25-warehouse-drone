@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    throttle:
+      kp: 0.0
+      ki: 0.0
+      kd: 0.0
+    pitch:
+      kp: 0.0
+      ki: 0.0
+      kd: 0.0
+    roll:
+      kp: 0.0
+      ki: 0.0
+      kd: 0.0

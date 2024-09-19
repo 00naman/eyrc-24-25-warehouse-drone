@@ -1,0 +1,6 @@
+/pico_controller:
+  ros__parameters:
+    setpoint:
+      x: 2.0
+      y: 2.0
+      z: 20.0
