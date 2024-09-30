@@ -17,6 +17,9 @@
 #include "pid_msg/msg/pid_error.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#define MAX_INTEGRAL_ERROR 1e4
+#define PIPE(x) ( ((x) < 1000) ? 1000 : (((x) > 2000) ? 2000 : (x)) )
+
 using std::placeholders::_1;
 using namespace std::chrono_literals;
 
@@ -26,9 +29,14 @@ struct pid_holder {
     double kd;
 };
 
+struct error_holder {
+    double prev_error;
+    double total_error;
+};
+
 class Swift_Pico : public rclcpp::Node {
 public:
-    Swift_Pico() : Node("pico_controller"), got_setpoint_wrt_drone(false) {
+    Swift_Pico() : Node("pico_controller"), got_setpoint_wrt_drone(false), first_pid(true) {
 
         this->tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         this->tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*(this->tf_buffer_));
@@ -68,7 +76,14 @@ public:
         this->declare_parameter<double>("eta", 100.0);
         this->eta = this->get_parameter("eta").as_double();
 
-        this->sample_time = 60ms; //in milli-seconds
+        this->sample_time = 333ms; //in milli-seconds
+
+        this->ethrottle.prev_error = 0.0;
+        this->ethrottle.total_error = 0.0;
+        this->eroll.prev_error = 0.0;
+        this->eroll.total_error = 0.0;
+        this->epitch.prev_error = 0.0;
+        this->epitch.total_error = 0.0;
 
         this->command_pub = this->create_publisher<swift_msgs::msg::SwiftMsgs>("/drone_command", 10);
         this->pid_error_pub = this->create_publisher<pid_msg::msg::PIDError>("/pid_error", 10);
@@ -88,9 +103,11 @@ private:
     // pid holders
     float eta;
     pid_holder throttle, roll, pitch;
+    error_holder ethrottle, eroll, epitch;
     geometry_msgs::msg::PoseStamped setpoint;
     geometry_msgs::msg::PoseStamped setpoint_wrt_drone;
     bool got_setpoint_wrt_drone;
+    bool first_pid;
 
     // rclcpp holders
     std::chrono::milliseconds sample_time;
@@ -135,15 +152,60 @@ private:
             return ;
         }
 
-        // std::cout << setpoint_wrt_drone.pose.position.x << ", ";
-        // std::cout << setpoint_wrt_drone.pose.position.y << ", ";
-        // std::cout << setpoint_wrt_drone.pose.position.z << std::endl;
+        std::cout << this->setpoint_wrt_drone.pose.position.x << ", ";
+        std::cout << this->setpoint_wrt_drone.pose.position.y << ", ";
+        std::cout << this->setpoint_wrt_drone.pose.position.z << std::endl;
+
+        // compute velocity in x, y and z
+        float vx = this->setpoint_wrt_drone.pose.position.x / this->eta;
+        float vy = this->setpoint_wrt_drone.pose.position.y / this->eta;
+        float vz = -this->setpoint_wrt_drone.pose.position.z / this->eta;
+
+        this->ethrottle.total_error += vz;
+        this->eroll.total_error += vy;
+        this->epitch.total_error += vx;
+
+        this->ethrottle.total_error = std::min(this->ethrottle.total_error, MAX_INTEGRAL_ERROR);
+        this->eroll.total_error = std::min(this->eroll.total_error, MAX_INTEGRAL_ERROR);
+        this->epitch.total_error = std::min(this->epitch.total_error, MAX_INTEGRAL_ERROR);
+
+        if (this->first_pid) {
+            
+            this->ethrottle.prev_error = vz;
+            this->eroll.prev_error = vy;
+            this->epitch.prev_error = vx;
+
+            this->first_pid = false;
+            return ;
+        }
 
         auto cmd = swift_msgs::msg::SwiftMsgs();
         auto error_pub = pid_msg::msg::PIDError();
 
-        // this->command_pub->publish(cmd);
-        // this->pid_error_pub->publish(error_pub);
+        cmd.rc_throttle = 1533 + this->throttle.kp * vz + 
+                                this->throttle.ki * this->ethrottle.total_error + 
+                                this->throttle.kd * (vz - this->ethrottle.prev_error);
+        cmd.rc_roll = 1500 + this->roll.kp * vy + 
+                                this->roll.ki * this->eroll.total_error + 
+                                this->roll.kd * (vy - this->eroll.prev_error);
+        cmd.rc_pitch = 1500 + this->pitch.kp * vx + 
+                                this->pitch.ki * this->epitch.total_error + 
+                                this->pitch.kd * (vz - this->epitch.prev_error);
+
+        cmd.rc_throttle = PIPE(cmd.rc_throttle);
+        cmd.rc_roll = PIPE(cmd.rc_roll);
+        cmd.rc_pitch = PIPE(cmd.rc_pitch);
+
+        this->command_pub->publish(cmd);
+        error_pub.roll_error = vy;
+        error_pub.pitch_error = vx;
+        error_pub.throttle_error = vz;
+        this->pid_error_pub->publish(error_pub);
+
+        this->ethrottle.prev_error = vz;
+        this->eroll.prev_error = vy;
+        this->epitch.prev_error = vx;
+        
     }
 
     void measure_setpoint() {
@@ -157,7 +219,6 @@ private:
             geometry_msgs::msg::PointStamped transformed_point;
             tf2::doTransform(setpoint, setpoint_wrt_drone, transform_stamped);
             this->got_setpoint_wrt_drone = true;
-
         }catch (tf2::TransformException &ex) {
             RCLCPP_ERROR(this->get_logger(), "Transform error: %s", ex.what());
         }

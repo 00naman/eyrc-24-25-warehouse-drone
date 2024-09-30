@@ -46,10 +46,10 @@ private:
         this->transform_stamped.transform.translation.y = msg.poses[0].position.y;
         this->transform_stamped.transform.translation.z = msg.poses[0].position.z;
 
-        this->transform_stamped.transform.rotation.x = msg.poses[0].orientation.x;
-        this->transform_stamped.transform.rotation.y = msg.poses[0].orientation.y;
-        this->transform_stamped.transform.rotation.z = msg.poses[0].orientation.z;
-        this->transform_stamped.transform.rotation.w = msg.poses[0].orientation.w;
+        this->transform_stamped.transform.rotation.x = 0.0; // msg.poses[0].orientation.x;
+        this->transform_stamped.transform.rotation.y = 0.0; // msg.poses[0].orientation.y;
+        this->transform_stamped.transform.rotation.z = 0.0; // msg.poses[0].orientation.z;
+        this->transform_stamped.transform.rotation.w = 1.0; // msg.poses[0].orientation.w;
         this->got_poses = true;
     }
 
