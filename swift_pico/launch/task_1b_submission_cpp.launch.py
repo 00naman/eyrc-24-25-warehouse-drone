@@ -95,8 +95,7 @@ def generate_launch_description():
         name='pico_controller',
         parameters=[
             os.path.join(controller_package_path, 'config', 'pid_values.yaml'),
-            os.path.join(controller_package_path, 'config', 'setpoint.yaml'),
-            os.path.join(controller_package_path, 'config', 'drone_parameters.yaml')
+            os.path.join(controller_package_path, 'config', 'setpoint.yaml')
         ],
         output='screen'
     )
@@ -114,6 +113,6 @@ def generate_launch_description():
         swift_interface,
         whycon,
         drone_tf_broadcaster,
-        # image_view,
+        image_view,
         # rosbag
     ])
